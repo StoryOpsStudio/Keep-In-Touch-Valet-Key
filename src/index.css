@@ -1,0 +1,304 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --color-primary: #3b82f6;
+  --color-primary-dark: #1e40af;
+  --color-accent: #f59e0b;
+  --color-accent-dark: #d97706;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-track {
+  background: #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #6b7280;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Smooth transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* Focus styles */
+.focus\:ring-2:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+}
+
+/* Animation for loading states */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Custom button hover effects */
+.btn-primary {
+  @apply bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200;
+}
+
+.btn-secondary {
+  @apply bg-gray-100 text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-all duration-200;
+}
+
+/* Card hover effects */
+.card-hover {
+  @apply transition-all duration-200 hover:shadow-lg hover:-translate-y-1;
+}
+
+/* Entertainment industry color palette */
+.text-entertainment-gold {
+  color: var(--color-accent);
+}
+
+.bg-entertainment-gold {
+  background-color: var(--color-accent);
+}
+
+.border-entertainment-gold {
+  border-color: var(--color-accent);
+}
+
+/* Responsive typography */
+@screen sm {
+  .text-responsive-xl {
+    font-size: 1.25rem;
+  }
+}
+
+@screen md {
+  .text-responsive-xl {
+    font-size: 1.5rem;
+  }
+}
+
+@screen lg {
+  .text-responsive-xl {
+    font-size: 1.875rem;
+  }
+}
+
+/* Loading spinner */
+.spinner {
+  border: 2px solid #f3f4f6;
+  border-top: 2px solid #3b82f6;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Success states */
+.success-pulse {
+  animation: successPulse 0.6s ease-in-out;
+}
+
+@keyframes successPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* File drop zone styles */
+.dropzone-active {
+  @apply border-blue-500 bg-blue-50 dark:bg-blue-900/20;
+}
+
+.dropzone-hover {
+  @apply border-blue-400 dark:border-blue-500 shadow-md;
+}
+
+/* Professional contact cards */
+.contact-card {
+  @apply bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 transition-all duration-200;
+}
+
+.contact-card:hover {
+  @apply shadow-lg border-gray-300 dark:border-gray-600 transform hover:-translate-y-1;
+}
+
+/* Category badges */
+.category-badge {
+  @apply px-3 py-1 rounded-full text-xs font-medium;
+}
+
+.category-actor {
+  @apply bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300;
+}
+
+.category-director {
+  @apply bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300;
+}
+
+.category-producer {
+  @apply bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300;
+}
+
+.category-agent {
+  @apply bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300;
+}
+
+.category-executive {
+  @apply bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300;
+}
+
+.category-writer {
+  @apply bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300;
+}
+
+.category-other {
+  @apply bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300;
+}
+
+/* Dark mode improvements */
+@media (prefers-color-scheme: dark) {
+  .dark-auto {
+    @apply dark:bg-gray-900 dark:text-white;
+  }
+}
+
+/* Mobile-first responsive design */
+@media (max-width: 640px) {
+  .mobile-padding {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  
+  .mobile-text-sm {
+    font-size: 0.875rem;
+  }
+}
+
+/* High-quality button animations */
+.btn-animate {
+  position: relative;
+  overflow: hidden;
+  transform: translateZ(0);
+}
+
+.btn-animate::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.btn-animate:hover::before {
+  left: 100%;
+}
+
+/* Professional form styling */
+.form-input {
+  @apply w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg 
+         focus:ring-2 focus:ring-blue-500 focus:border-transparent 
+         bg-white dark:bg-gray-700 text-gray-900 dark:text-white 
+         placeholder-gray-500 dark:placeholder-gray-400
+         transition-all duration-200;
+}
+
+.form-label {
+  @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2;
+}
+
+/* Status indicators */
+.status-online {
+  @apply w-3 h-3 bg-green-400 rounded-full animate-pulse;
+}
+
+.status-offline {
+  @apply w-3 h-3 bg-gray-400 rounded-full;
+}
+
+/* Entertainment industry themed gradients */
+.gradient-entertainment {
+  background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #f59e0b 100%);
+}
+
+.gradient-entertainment-dark {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #374151 100%);
+}
+
+/* Micro-interactions */
+.hover-lift {
+  @apply transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg;
+}
+
+.hover-scale {
+  @apply transition-transform duration-200 hover:scale-105;
+}
+
+/* Loading states */
+.skeleton {
+  @apply animate-pulse bg-gray-200 dark:bg-gray-700 rounded;
+}
+
+.skeleton-text {
+  @apply skeleton h-4;
+}
+
+.skeleton-title {
+  @apply skeleton h-6;
+}
+
+.skeleton-avatar {
+  @apply skeleton w-10 h-10 rounded-full;
+}
