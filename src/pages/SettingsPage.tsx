@@ -1,3 +1,4 @@
+import { useContactStore } from '../store/contactStore';
 import { useState, useEffect } from 'react';
 import { Settings, Mail, Shield, Loader2, AlertCircle, X } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
@@ -178,9 +179,12 @@ if (!providerToken) {
 
 console.log('🔑 [SettingsPage] Microsoft provider token retrieved successfully from fresh session');
 
-      const { data, error: syncError } = await supabase.functions.invoke('sync-outlook-contacts', {
-        body: { providerToken }
-      });
+const { data, error: syncError } = await supabase.functions.invoke('sync-outlook-contacts', {
+  body: { providerToken },
+  headers: {
+    Authorization: `Bearer ${session.access_token}`
+  }
+});
 
       if (syncError) {
         console.error('❌ [SettingsPage] Sync error:', syncError);
@@ -191,6 +195,11 @@ console.log('🔑 [SettingsPage] Microsoft provider token retrieved successfully
         const message = `Sync complete! Synced: ${data.syncedCount}, Deleted: ${data.deletedCount}, Skipped: ${data.skippedCount}`;
         setSyncMessage(message);
         console.log('✅ [SettingsPage] Sync successful:', data);
+        
+        // CRITICAL: Refresh the contact store to show the new contact
+        const { fetchContacts } = useContactStore.getState();
+        await fetchContacts();
+        console.log('🔄 [SettingsPage] Contact store refreshed after sync');
       } else {
         throw new Error(data.message || 'Sync failed with unknown error');
       }

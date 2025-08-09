@@ -102,19 +102,56 @@ export const useContactStore = create<ContactState>((set, get) => ({
     }
   },
 
-  // UPDATED: Clear contacts without database operation (for logout)
+  // UPDATED: Clear contacts from both database and store
   clearContacts: async () => {
-    console.log('🗑️ ContactStore: Clearing all contacts from store');
+    console.log('🗑️ ContactStore: Starting database contact clear...');
     
-    // Update store state immediately (no database operation needed for logout)
-    set({ 
-      contacts: [], 
-      isLoading: false,
-      isRefreshing: false,
-      error: null 
-    });
-    
-    console.log('✅ ContactStore: All contacts cleared from store');
+    try {
+      // Get current session for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      // Call the clear-contacts Edge Function
+      const { data, error } = await supabase.functions.invoke('clear-contacts', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`
+        }
+      });
+
+      if (error) {
+        console.error('❌ ContactStore: Clear contacts error:', error);
+        throw new Error(`Clear failed: ${error.message}`);
+      }
+
+      if (data.status === 'success') {
+        console.log(`✅ ContactStore: Successfully cleared ${data.deletedCount} contacts from database`);
+        
+        // Clear the local store state after successful database clear
+        set({ 
+          contacts: [], 
+          isLoading: false,
+          isRefreshing: false,
+          error: null 
+        });
+        
+        console.log('✅ ContactStore: Local store cleared after successful database operation');
+      } else {
+        throw new Error(data.message || 'Clear failed with unknown error');
+      }
+
+    } catch (err) {
+      console.error('❌ ContactStore: Error clearing contacts:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to clear contacts';
+      
+      // Set error state but don't change contacts (failed operation)
+      set({ error: errorMessage });
+      
+      // Re-throw the error so the UI can handle it
+      throw err;
+    }
   },
 
   addContact: (contact: Contact) => {
