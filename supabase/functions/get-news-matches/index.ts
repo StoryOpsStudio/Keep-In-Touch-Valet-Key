@@ -9,7 +9,7 @@ interface NewsMatch {
   articleTitle: string;
   articleUrl: string;
   publication: 'deadline' | 'variety' | 'thr';
-  matchLocation: string;
+  matchLocation: 'title' | 'excerpt' | 'content' | 'full';
   excerpt: string;
   foundAt: Date;
   userId: string;
@@ -18,13 +18,12 @@ interface NewsMatch {
 interface WordPressPost {
   id: number;
   title: { rendered: string };
-  content: { rendered: string };
   excerpt: { rendered: string };
+  content: { rendered: string };
   link: string;
   date: string;
 }
 
-// WordPress REST API endpoints
 const WORDPRESS_APIS = {
   deadline: 'https://deadline.com/wp-json/wp/v2/posts',
   variety: 'https://variety.com/wp-json/wp/v2/posts',
@@ -35,246 +34,121 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-}
+};
 
-// Create last name map for efficient searching
+// ---------- helpers ----------
+
 function createLastNameMap(contacts: any[]): Map<string, any[]> {
   const lastNameMap = new Map<string, any[]>();
-  
-  contacts.forEach(contact => {
-    if (contact.last_name) {
-      const lastName = contact.last_name.toLowerCase();
-      
-      if (!lastNameMap.has(lastName)) {
-        lastNameMap.set(lastName, []);
-      }
-      lastNameMap.get(lastName)!.push(contact);
-    }
-  });
-  
+  for (const c of contacts) {
+    if (!c.first_name || !c.last_name) continue;
+    const last = String(c.last_name).toLowerCase().trim();
+    if (!lastNameMap.has(last)) lastNameMap.set(last, []);
+    lastNameMap.get(last)!.push(c);
+  }
   return lastNameMap;
 }
 
 class NewsProcessor {
   private supabase: any;
-  private readonly POSTS_PER_PAGE = 50;
+  private readonly TARGET_DAYS = 2;    // scan last 48h
+  private readonly POSTS_PER_PAGE = 100;
+  private readonly MAX_PAGES = 10;
 
   constructor(supabase: any) {
     this.supabase = supabase;
   }
 
-  // Clean text helper
   cleanText(text: string): string {
-    return text.replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+    return (text || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&[^;]+;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
-  // Fetch full article content
-  async fetchFullArticleContent(url: string): Promise<string> {
+  // Strip page cruft from WP HTML (keeps article body clean)
+  private parseWordPressContent(htmlContent: string): string {
     try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; NewsBot/1.0)',
-        }
-      });
-      
-      if (!response.ok) return '';
-      
-      const html = await response.text();
-      const $ = load(html);
-      
-      // Remove scripts, styles, and other unwanted elements
-      $('script, style, nav, header, footer, .advertisement').remove();
-      
-      // Get article content from common selectors
-      const contentSelectors = [
-        'article',
-        '.article-content',
-        '.entry-content',
-        '.post-content',
-        '.content',
-        'main'
+      const $ = load(htmlContent || '');
+      const noiseSelectors = [
+        '.jp-relatedposts','.sharedaddy','.sd-sharing','.yarpp-related','.related-posts',
+        '.wp-block-embed','.wp-block-social-links','.addtoany_share_save_container',
+        '.post-tags','.post-categories','.author-bio','.comments-section',
+        '.newsletter-signup','.advertisement','.ad-container','.sidebar','.footer-content',
+        'script','style','noscript','.screen-reader-text','.sr-only'
       ];
-      
-      let content = '';
-      for (const selector of contentSelectors) {
-        const element = $(selector);
-        if (element.length && element.text().trim().length > content.length) {
-          content = element.text().trim();
-        }
-      }
-      
-      return content || $('body').text().trim();
-    } catch (error) {
-      console.warn(`⚠️ Could not fetch full content from ${url}:`, error);
-      return '';
+      noiseSelectors.forEach(sel => $(sel).remove());
+      return this.cleanText($.text() || '');
+    } catch {
+      return this.cleanText(htmlContent || '');
     }
   }
 
-  // Check article for matches
-  async checkArticleForMatches(
-    post: WordPressPost,
-    lastNameMap: Map<string, any[]>,
-    userId: string
-  ): Promise<number> {
-    let matchesSaved = 0;
-    
-    // Get all text content
-    const title = this.cleanText(post.title.rendered);
-    const excerpt = this.cleanText(post.excerpt.rendered);
-    const content = this.cleanText(post.content.rendered);
-    
-    // Try to get full article content
-    let fullContent = '';
-    try {
-      fullContent = await this.fetchFullArticleContent(post.link);
-    } catch (error) {
-      console.warn(`⚠️ Could not fetch full content for ${post.title.rendered}`);
-    }
-    
-    // Combine all text sources
-    const textSources = [
-      { text: title, location: 'title' },
-      { text: excerpt, location: 'excerpt' },
-      { text: content, location: 'content' },
-      { text: fullContent, location: 'full article' }
-    ];
-    
-    // Check each text source
-    for (const { text, location } of textSources) {
-      if (!text) continue;
-      
-      const textLower = text.toLowerCase();
-      const words = textLower.split(/\s+/);
-      
-      for (const word of words) {
-        const cleanWord = word.replace(/[^\w]/g, ''); // Remove punctuation
-        if (cleanWord.length < 2) continue;
-        
-        const potentialContacts = lastNameMap.get(cleanWord);
-        if (potentialContacts) {
-          // Check each contact with this last name
-          for (const contact of potentialContacts) {
-            const fullName = `${contact.first_name} ${contact.last_name}`;
-            
-            // Check if full name appears in text
-            if (textLower.includes(fullName.toLowerCase())) {
-              const publication = this.getPublicationFromUrl(post.link);
-              
-              const match: NewsMatch = {
-                contactId: contact.id.toString(),
-                contactName: fullName,
-                contactCategory: contact.category || 'OTHER',
-                articleTitle: this.cleanText(post.title.rendered),
-                articleUrl: post.link,
-                publication,
-                matchLocation: location,
-                excerpt: this.findExcerpt(text, fullName, 300),
-                foundAt: new Date(post.date),
-                userId: userId
-              };
-              
-              // Save to database AND broadcast via channel
-              const saved = await this.saveMatchAndBroadcast(match);
-              if (saved) {
-                matchesSaved++;
-                console.log(`🎯 MATCH SAVED & BROADCASTED: ${fullName} found in ${location} of "${post.title.rendered}"`);
-              }
-            }
-          }
-        }
-      }
-    }
-    
-    return matchesSaved;
-  }
-
-  // Get publication from URL
-  getPublicationFromUrl(url: string): 'deadline' | 'variety' | 'thr' {
+  private getPublicationFromUrl(url: string): 'deadline' | 'variety' | 'thr' {
     if (url.includes('deadline.com')) return 'deadline';
     if (url.includes('variety.com')) return 'variety';
     if (url.includes('hollywoodreporter.com')) return 'thr';
     return 'deadline';
   }
 
-  // Fetch posts from WordPress API
-  async fetchPostsFromWordPress(apiUrl: string, page: number = 1): Promise<WordPressPost[]> {
-    try {
-      const url = `${apiUrl}?page=${page}&per_page=${this.POSTS_PER_PAGE}&orderby=date&order=desc`;
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const posts = await response.json();
-      return posts;
-    } catch (error) {
-      console.error(`❌ Failed to fetch posts from ${apiUrl}:`, error);
-      return [];
-    }
-  }
+  // WordPress pagination with a date window + only needed fields
+  async fetchWordPressPostsPaginated(apiUrl: string, publication: string): Promise<WordPressPost[]> {
+    const twoDaysAgo = new Date(Date.now() - this.TARGET_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  // Fetch all recent posts from a publication
-  async fetchAllRecentPosts(publication: string, apiUrl: string): Promise<WordPressPost[]> {
-    console.log(`📚 Fetching recent posts from ${publication}...`);
-    
-    const allPosts: WordPressPost[] = [];
+    const posts: WordPressPost[] = [];
+    const seen = new Set<number>();
     let page = 1;
-    let hasMorePages = true;
-    
-    while (hasMorePages && page <= 5) { // Limit to 5 pages max
-      try {
-        const posts = await this.fetchPostsFromWordPress(apiUrl, page);
-        
-        if (posts.length > 0) {
-          allPosts.push(...posts);
-          console.log(`📄 ${publication} page ${page}: ${posts.length} posts (${allPosts.length} total)`);
-        }
-        
-        // If we got fewer posts than expected, we've likely reached the end
-        if (posts.length < this.POSTS_PER_PAGE) {
-          console.log(`📄 Received ${posts.length} < ${this.POSTS_PER_PAGE} posts - likely at end of data`);
-          hasMorePages = false;
-        } else {
-          page++;
-        }
-        
-        // Small delay to be respectful to the API
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-      } catch (error) {
-        console.error(`❌ Failed to fetch page ${page} from ${publication}:`, error);
-        hasMorePages = false;
+    let hasMore = true;
+
+    while (hasMore && page <= this.MAX_PAGES) {
+      const url = `${apiUrl}?per_page=${this.POSTS_PER_PAGE}&page=${page}` +
+                  `&after=${encodeURIComponent(twoDaysAgo)}` +
+                  `&_fields=id,title,excerpt,content,link,date`;
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'KeepInTouchBot/1.0' }
+      });
+
+      if (!res.ok) {
+        // Some WP sites return 400 when you go past last page – treat as end.
+        if (res.status === 400 && page > 1) break;
+        console.error(`❌ Failed ${publication} page ${page}: ${res.status} ${res.statusText}`);
+        break;
       }
+
+      const pagePosts: WordPressPost[] = await res.json();
+      if (!pagePosts || pagePosts.length === 0) break;
+
+      for (const p of pagePosts) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          posts.push(p);
+        }
+      }
+
+      if (pagePosts.length < this.POSTS_PER_PAGE) hasMore = false;
+      page++;
+      await new Promise(r => setTimeout(r, 500)); // be polite
     }
-    
-    console.log(`✅ WordPress API pagination complete for ${publication}: ${allPosts.length} recent posts from ${page - 1} pages`);
-    return allPosts;
+
+    return posts;
   }
 
-  // Find excerpt around contact mention
-  findExcerpt(text: string, contactName: string, contextLength: number = 200): string {
-    const lowerText = text.toLowerCase();
-    const lowerName = contactName.toLowerCase();
-    const index = lowerText.indexOf(lowerName);
-    
-    if (index === -1) return text.substring(0, contextLength) + '...';
-    
-    const start = Math.max(0, index - contextLength / 2);
-    const end = Math.min(text.length, index + contactName.length + contextLength / 2);
-    
-    let excerpt = text.substring(start, end);
-    
-    if (start > 0) excerpt = '...' + excerpt;
-    if (end < text.length) excerpt = excerpt + '...';
-    
-    return excerpt.trim();
+  // Build an excerpt around the first name hit
+  private findExcerpt(sourceText: string, contactName: string, context = 300): string {
+    const text = sourceText || '';
+    const lower = text.toLowerCase();
+    const needle = contactName.toLowerCase();
+    const idx = lower.indexOf(needle);
+    if (idx < 0) return text.slice(0, context) + (text.length > context ? '…' : '');
+    const start = Math.max(0, idx - Math.floor(context / 2));
+    const end = Math.min(text.length, idx + needle.length + Math.floor(context / 2));
+    return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
   }
 
-  // Save match to database AND broadcast via Supabase channel
+  // One save+broadcast per contact+article (choose best location)
   private async saveMatchAndBroadcast(match: NewsMatch): Promise<boolean> {
     try {
-      // Step 1: Save to database
       const { error: upsertError } = await this.supabase
         .from('news_matches')
         .upsert({
@@ -290,246 +164,210 @@ class NewsProcessor {
           is_new: true,
           is_read: false,
           user_id: match.userId
-        }, {
-          onConflict: 'article_url, contact_id'
-        });
+        }, { onConflict: 'article_url, contact_id' });
 
       if (upsertError) {
         console.error('❌ Database upsert error:', upsertError);
         return false;
       }
 
-      // Step 2: Broadcast via Supabase Realtime
+      // Per-user channel
       const { error: broadcastError } = await this.supabase
         .channel(`news-matches-${match.userId}`)
-        .send({
-          type: 'broadcast',
-          event: 'new-match',
-          payload: { match }
-        });
+        .send({ type: 'broadcast', event: 'new-match', payload: { match } });
 
-      if (broadcastError) {
-        console.warn('⚠️ Broadcast error (match still saved to database):', broadcastError);
-        return true; // Still return true since database save succeeded
-      }
-
+      if (broadcastError) console.warn('⚠️ Broadcast error (saved anyway):', broadcastError);
       return true;
-    } catch (error) {
-      console.error('❌ Error saving match:', error);
+    } catch (e) {
+      console.error('❌ Error saving match:', e);
       return false;
     }
   }
 
-  // Process all publications
-  async processAllPublications(lastNameMap: Map<string, any[]>, userId: string): Promise<{ totalArticles: number; totalMatches: number }> {
-    console.log(`🚀 Processing all publications with DATABASE + BROADCAST workflow for user ${userId}...`);
-    
-    let totalArticlesProcessed = 0;
-    let totalMatchesSaved = 0;
-    let totalFullContentChecks = 0;
-    
-    // Process each publication
-    for (const [publication, apiUrl] of Object.entries(WORDPRESS_APIS)) {
-      try {
-        console.log(`\n📰 Processing ${publication.toUpperCase()}...`);
-        
-        // Fetch all recent posts
-        const posts = await this.fetchAllRecentPosts(publication, apiUrl);
-        console.log(`📊 ${publication}: ${posts.length} posts to analyze`);
-        
-        // Process each post
-        for (const post of posts) {
-          totalArticlesProcessed++;
-          totalFullContentChecks++;
-          
-          // Check for matches
-          const matchesSaved = await this.checkArticleForMatches(post, lastNameMap, userId);
-          totalMatchesSaved += matchesSaved;
-          
-          // Small delay between posts
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        
-      } catch (error) {
-        console.error(`❌ Failed to process ${publication}:`, error);
+  // Scan one post (dedup per contact, pick best location)
+  async checkArticleForMatches(
+    post: WordPressPost,
+    lastNameMap: Map<string, any[]>,
+    userId: string
+  ): Promise<number> {
+    // Prepare sources (use WP content as "full")
+    const title = this.cleanText(post.title?.rendered || '');
+    const excerpt = this.cleanText(post.excerpt?.rendered || '');
+    const full = this.parseWordPressContent(post.content?.rendered || '');
+
+    const sources = [
+      { key: 'title' as const, text: title },
+      { key: 'excerpt' as const, text: excerpt },
+      { key: 'content' as const, text: this.cleanText(post.content?.rendered || '') }, // WP rendered, no extra HTTP
+      { key: 'full' as const, text: full }
+    ];
+
+    // Build a unique vocabulary once, then intersect with last names
+    const combinedLower = sources.map(s => (s.text || '').toLowerCase()).join(' ');
+    const uniqueWords = new Set(combinedLower.split(/\W+/).filter(w => w.length >= 2));
+    const candidateLastNames: string[] = [];
+    for (const w of uniqueWords) if (lastNameMap.has(w)) candidateLastNames.push(w);
+
+    const publication = this.getPublicationFromUrl(post.link);
+    const alreadySaved = new Set<string>(); // contact.id per article
+    let saved = 0;
+
+    // Helper to choose the best label for UI
+    const chooseLocation = (fullNameLower: string) => {
+      // priority: title > excerpt > content > full
+      for (const s of sources) {
+        if ((s.text || '').toLowerCase().includes(fullNameLower)) return s.key;
       }
-      
-      // Delay between publications
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-    console.log(`✅ DATABASE + BROADCAST processing complete for user ${userId}:`);
-    console.log(`   📊 Articles processed: ${totalArticlesProcessed}`);
-    console.log(`   🔍 Full content checks: ${totalFullContentChecks}`);
-    console.log(`   💾 Matches saved to database: ${totalMatchesSaved}`);
-    console.log(`   📡 Matches broadcasted via Supabase: ${totalMatchesSaved}`);
-    console.log(`   ✅ Coverage: 100% of articles had full content analyzed`);
-    
-    return {
-      totalArticles: totalArticlesProcessed,
-      totalMatches: totalMatchesSaved
+      return 'full' as const;
     };
-  }
-}
 
-// FIXED: RLS-compatible contact fetching function
-async function getAllContactsPaginated(supabase: any, userId: string): Promise<any[]> {
-  console.log(`📋 Starting paginated contact fetching for user ID: ${userId}...`);
-  
-  const allContacts: any[] = [];
-  const pageSize = 1000;
-  let currentPage = 0;
-  let hasMoreData = true;
-  
-  while (hasMoreData) {
-    const from = currentPage * pageSize;
-    const to = from + pageSize - 1;
-    
-    console.log(`📄 Fetching contacts page ${currentPage + 1} (contacts ${from + 1} to ${to + 1}) for user ${userId}...`);
-    
-    try {
-      // FIXED: Try RPC first, then fallback to direct query
-      const { data, error: supabaseError } = await supabase.rpc('get_user_contacts', {
-        target_user_id: userId,
-        page_offset: from,
-        page_limit: pageSize
-      });
+    for (const last of candidateLastNames) {
+      const potentials = lastNameMap.get(last)!;
+      for (const contact of potentials) {
+        const cid = String(contact.id);
+        if (alreadySaved.has(cid)) continue;
 
-      if (supabaseError) {
-        // FALLBACK: Direct query with service role
-        console.log('⚠️ RPC method not found, trying direct query with service role...');
-        
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('contacts')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .range(from, to);
+        const fullName = `${contact.first_name} ${contact.last_name}`;
+        const fullNameLower = fullName.toLowerCase();
 
-        if (fallbackError) {
-          throw new Error(`Failed to fetch contacts page ${currentPage + 1}: ${fallbackError.message}`);
-        }
-        
-        if (fallbackData && fallbackData.length > 0) {
-          allContacts.push(...fallbackData);
-          console.log(`✅ Contacts page ${currentPage + 1} loaded ${fallbackData.length} contacts (total so far: ${allContacts.length})`);
-        }
+        // Any source contains the full name?
+        if (!combinedLower.includes(fullNameLower)) continue;
 
-        if (!fallbackData || fallbackData.length < pageSize) {
-          hasMoreData = false;
-          console.log(`🏁 Reached end of contact data. Final total: ${allContacts.length} contacts`);
-        }
-      } else {
-        if (data && data.length > 0) {
-          allContacts.push(...data);
-          console.log(`✅ Contacts page ${currentPage + 1} loaded ${data.length} contacts (total so far: ${allContacts.length})`);
-        }
+        const bestKey = chooseLocation(fullNameLower);
+        const bestSource = sources.find(s => s.key === bestKey)?.text || full;
 
-        if (!data || data.length < pageSize) {
-          hasMoreData = false;
-          console.log(`🏁 Reached end of contact data. Final total: ${allContacts.length} contacts`);
+        const match: NewsMatch = {
+          contactId: cid,
+          contactName: fullName,
+          contactCategory: contact.category || 'OTHER',
+          articleTitle: this.cleanText(post.title?.rendered || ''),
+          articleUrl: post.link,
+          publication,
+          matchLocation: bestKey,
+          excerpt: this.findExcerpt(bestSource, fullName, 300),
+          foundAt: new Date(post.date),
+          userId
+        };
+
+        const ok = await this.saveMatchAndBroadcast(match);
+        if (ok) {
+          alreadySaved.add(cid);
+          saved++;
+          console.log(`🎯 MATCH SAVED & BROADCASTED: ${fullName} in ${bestKey} of "${this.cleanText(post.title?.rendered || '')}"`);
         }
       }
-    } catch (error) {
-      throw new Error(`Failed to fetch contacts page ${currentPage + 1}: ${error.message}`);
     }
 
-    currentPage++;
+    return saved;
   }
-  
-  return allContacts;
+
+  async processAllPublications(lastNameMap: Map<string, any[]>, userId: string) {
+    let totalArticles = 0;
+    let totalMatches = 0;
+
+    for (const [pub, api] of Object.entries(WORDPRESS_APIS)) {
+      try {
+        console.log(`\n📰 Fetching ${pub.toUpperCase()} (last ${this.TARGET_DAYS} days)…`);
+        const posts = await this.fetchWordPressPostsPaginated(api, pub);
+        console.log(`📊 ${pub}: ${posts.length} posts`);
+
+        for (const post of posts) {
+          totalArticles++;
+          totalMatches += await this.checkArticleForMatches(post, lastNameMap, userId);
+          await new Promise(r => setTimeout(r, 50)); // small yield
+        }
+      } catch (e) {
+        console.error(`❌ Failed ${pub}:`, e);
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    console.log(`✅ Done. Articles: ${totalArticles} | Matches: ${totalMatches}`);
+    return { totalArticles, totalMatches };
+  }
 }
+
+// Same as your current version (keeps RLS safety + pagination)
+async function getAllContactsPaginated(supabase: any, userId: string): Promise<any[]> {
+  const all: any[] = [];
+  const pageSize = 1000;
+  let page = 0;
+  let more = true;
+
+  while (more) {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    // Try RPC first, fallback to direct query
+    const { data, error: rpcError } = await supabase.rpc('get_user_contacts', {
+      target_user_id: userId,
+      page_offset: from,
+      page_limit: pageSize
+    });
+
+    if (rpcError) {
+      const { data: backup, error: qErr } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (qErr) throw new Error(qErr.message);
+      if (backup?.length) all.push(...backup);
+      if (!backup || backup.length < pageSize) more = false;
+    } else {
+      if (data?.length) all.push(...data);
+      if (!data || data.length < pageSize) more = false;
+    }
+
+    page++;
+  }
+
+  return all;
+}
+
+// ---------- HTTP handler ----------
 
 serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    // Extract user ID from request body
-    const { userId } = req.method === 'POST' ? 
-      await req.json() : { userId: null };
-    
-    // CRITICAL: Validate that userId is provided
-    if (!userId) {
-      throw new Error('User ID is required for user-isolated processing');
-    }
-    
-    console.log(`🚀 Starting DATABASE + BROADCAST news processing for user ${userId}...`);
+    const { userId } = req.method === 'POST' ? await req.json() : { userId: null };
+    if (!userId) throw new Error('User ID is required');
 
-    // Get environment variables
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!supabaseUrl || !serviceKey) throw new Error('Supabase environment variables are required');
 
-    if (!supabaseUrl || !supabaseServiceKey) {
-      throw new Error('Supabase environment variables are required')
-    }
-
-    // Initialize Supabase client and news processor
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-    const newsProcessor = new NewsProcessor(supabase);
-
-    // Step 1: Fetch ALL contacts from database using pagination (user-specific)
+    const supabase = createClient(supabaseUrl, serviceKey);
     const contacts = await getAllContactsPaginated(supabase, userId);
-
-    if (!contacts || contacts.length === 0) {
-      return new Response(
-        JSON.stringify({ 
-          status: 'complete',
-          message: `No contacts found for user ${userId} - news processing skipped`
-        }),
-        { 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200 
-        }
-      )
+    if (!contacts?.length) {
+      return new Response(JSON.stringify({ status: 'complete', message: 'No contacts for user' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200
+      });
     }
 
-    // Step 2: Create Last Name Map for efficient matching
     const lastNameMap = createLastNameMap(contacts);
+    const news = new NewsProcessor(supabase);
+    const results = await news.processAllPublications(lastNameMap, userId);
 
-    // Step 3: Process all publications and save matches to database + broadcast
-    const results = await newsProcessor.processAllPublications(lastNameMap, userId);
-
-    console.log(`✅ DATABASE + BROADCAST news processing complete for user ${userId}!`);
-    console.log(`   📊 Total articles processed: ${results.totalArticles}`);
-    console.log(`   💾 Total matches saved to database: ${results.totalMatches}`);
-    console.log(`   📡 Total matches broadcasted via Supabase: ${results.totalMatches}`);
-    console.log(`   🔄 Frontend will receive instant updates via Broadcast channel`);
-
-    // Return simple success message
-    return new Response(
-      JSON.stringify({ 
-        status: 'complete',
-        message: 'News processing finished successfully',
-        stats: {
-          articlesProcessed: results.totalArticles,
-          matchesSavedToDatabase: results.totalMatches,
-          matchesBroadcasted: results.totalMatches,
-          contactsProcessed: contacts.length,
-          publicationsProcessed: Object.keys(WORDPRESS_APIS).length,
-          method: 'database-plus-broadcast-workflow'
-        }
-      }),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200 
+    return new Response(JSON.stringify({
+      status: 'complete',
+      message: 'News processing finished successfully',
+      stats: {
+        ...results,
+        contactsProcessed: contacts.length,
+        publicationsProcessed: Object.keys(WORDPRESS_APIS).length,
+        method: 'database-plus-broadcast-workflow'
       }
-    )
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error) {
-    console.error('❌ Edge Function Error:', error)
-    
-    return new Response(
-      JSON.stringify({ 
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Unknown error occurred'
-      }),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500 
-      }
-    )
+    console.error('❌ Edge Function Error:', error);
+    return new Response(JSON.stringify({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 });
   }
-})
+});

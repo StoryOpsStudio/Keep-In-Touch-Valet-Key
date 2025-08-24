@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, Film, AlertCircle } from 'lucide-react';
+import { supabase } from '../supabaseClient';
+import { useContactStore } from '../store/contactStore';
 
 export function AuthCallbackPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const shouldSync = searchParams.get('sync') === 'true';
 
   useEffect(() => {
     const handleCallback = async () => {
@@ -18,7 +22,43 @@ export function AuthCallbackPage() {
         
         if (hasOAuthParams) {
           // OAuth callback detected - Supabase already handled the linkIdentity
-          console.log('✅ [AuthCallbackPage] OAuth callback detected, redirecting to settings...');
+          console.log('✅ [AuthCallbackPage] OAuth callback detected');
+          
+          // Wait a moment for Supabase to process the OAuth callback
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Check if we should sync Outlook contacts (coming from Microsoft connection)
+          if (shouldSync) {
+            console.log('🔄 [AuthCallbackPage] Syncing Outlook contacts after Microsoft connection...');
+            
+            const { data: { session } } = await supabase.auth.getSession();
+            
+            if (session?.provider_token) {
+              try {
+                const { data } = await supabase.functions.invoke('sync-outlook-contacts', {
+                  body: { providerToken: session.provider_token },
+                  headers: {
+                    Authorization: `Bearer ${session.access_token}`
+                  }
+                });
+
+                if (data?.status === 'success') {
+                  console.log(`✅ [AuthCallbackPage] Initial Outlook sync complete! Synced: ${data.syncedCount}, Deleted: ${data.deletedCount}, Skipped: ${data.skippedCount}`);
+                  // Refresh contacts in the store
+                  await useContactStore.getState().fetchContacts();
+                } else {
+                  console.warn('⚠️ [AuthCallbackPage] Sync returned non-success status:', data);
+                }
+              } catch (syncError) {
+                console.error('⚠️ [AuthCallbackPage] Outlook sync failed (non-critical):', syncError);
+                // Don't set error state - this is non-critical
+              }
+            } else {
+              console.log('⚠️ [AuthCallbackPage] No provider token available for sync');
+            }
+          }
+          
+          console.log('✅ [AuthCallbackPage] Redirecting to settings...');
           navigate('/settings');
         } else {
           // No OAuth params - just a regular visit to /auth/callback
@@ -33,7 +73,7 @@ export function AuthCallbackPage() {
     };
 
     handleCallback();
-  }, [navigate]);
+  }, [navigate, shouldSync]);
 
   // Error state
   if (error) {
@@ -66,7 +106,9 @@ export function AuthCallbackPage() {
           <Loader2 className="h-6 w-6 animate-spin text-white" />
           <h2 className="text-2xl font-bold text-white">Keep in Touch</h2>
         </div>
-        <p className="text-blue-200">Processing authentication...</p>
+        <p className="text-blue-200">
+          {shouldSync ? 'Syncing Outlook contacts...' : 'Processing authentication...'}
+        </p>
       </div>
     </div>
   );

@@ -18,8 +18,6 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
-  const [syncLoading, setSyncLoading] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Fetch user profile on component mount
   useEffect(() => {
@@ -101,7 +99,7 @@ export function SettingsPage() {
         provider: 'azure',
         options: {
           scopes: 'Contacts.Read Mail.Read',
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?sync=true`, // Add sync flag
         },
       });
 
@@ -154,63 +152,6 @@ export function SettingsPage() {
     }
   };
 
-  // Test Outlook contacts sync
-  const handleTestSync = async () => {
-    try {
-      setSyncLoading(true);
-      setSyncMessage(null);
-      setError(null);
-
-      console.log('🔄 [SettingsPage] Testing Outlook contacts sync...');
-
-console.log('🔄 [SettingsPage] Forcing session refresh to get latest tokens...');
-const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-if (sessionError || !session) {
-  throw new Error('Could not retrieve user session. Please log in again.');
-}
-
-const providerToken = session.provider_token;
-
-if (!providerToken) {
-  // This is a more specific error now. It means the token is truly missing from the session itself.
-  throw new Error('Provider token is missing from the session. Please try disconnecting and reconnecting your Microsoft account.');
-}
-
-console.log('🔑 [SettingsPage] Microsoft provider token retrieved successfully from fresh session');
-
-const { data, error: syncError } = await supabase.functions.invoke('sync-outlook-contacts', {
-  body: { providerToken },
-  headers: {
-    Authorization: `Bearer ${session.access_token}`
-  }
-});
-
-      if (syncError) {
-        console.error('❌ [SettingsPage] Sync error:', syncError);
-        throw new Error(`Sync failed: ${syncError.message}`);
-      }
-
-      if (data.status === 'success') {
-        const message = `Sync complete! Synced: ${data.syncedCount}, Deleted: ${data.deletedCount}, Skipped: ${data.skippedCount}`;
-        setSyncMessage(message);
-        console.log('✅ [SettingsPage] Sync successful:', data);
-        
-        // CRITICAL: Refresh the contact store to show the new contact
-        const { fetchContacts } = useContactStore.getState();
-        await fetchContacts();
-        console.log('🔄 [SettingsPage] Contact store refreshed after sync');
-      } else {
-        throw new Error(data.message || 'Sync failed with unknown error');
-      }
-
-    } catch (err) {
-      console.error('Outlook sync test error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to sync Outlook contacts');
-    } finally {
-      setSyncLoading(false);
-    }
-  };
   if (!user) {
     return (
       <div className="max-w-4xl mx-auto space-y-8">
@@ -270,16 +211,6 @@ const { data, error: syncError } = await supabase.functions.invoke('sync-outlook
         </div>
       )}
 
-      {/* Sync Success Message */}
-      {syncMessage && (
-        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-6">
-          <div className="flex items-center space-x-2">
-            <AlertCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
-            <span className="font-medium text-green-900 dark:text-green-300">Success:</span>
-            <span className="text-green-700 dark:text-green-400">{syncMessage}</span>
-          </div>
-        </div>
-      )}
       {/* Account Connections Section */}
       {!loading && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
@@ -356,22 +287,6 @@ const { data, error: syncError } = await supabase.functions.invoke('sync-outlook
                       )}
                       <span>Disconnect Account</span>
                     </button>
-                    
-                    {/* Test Sync Button - Only visible when Microsoft is connected */}
-                    <button
-                      onClick={handleTestSync}
-                      disabled={syncLoading || connectionLoading}
-                      className="w-full flex items-center justify-center space-x-2 px-4 py-2 rounded-lg font-medium transition-colors bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50 disabled:opacity-50"
-                    >
-                      {syncLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Mail className="h-4 w-4" />
-                      )}
-                      <span>
-                        {syncLoading ? 'Syncing...' : 'Manually Sync Outlook Contacts (Test)'}
-                      </span>
-                    </button>
                   </div>
                 )}
                 
@@ -383,7 +298,7 @@ const { data, error: syncError } = await supabase.functions.invoke('sync-outlook
                 
                 {isMicrosoftConnected && (
                   <p className="text-xs text-green-600 dark:text-green-400">
-                    ✅ Ready for contact sync and voice analysis
+                    ✅ Contacts sync automatically on login
                   </p>
                 )}
               </div>
@@ -395,7 +310,7 @@ const { data, error: syncError } = await supabase.functions.invoke('sync-outlook
                 <div className="p-2 bg-red-100 dark:bg-red-900 rounded-lg">
                   <Mail className="h-5 w-5 text-red-600 dark:text-red-400" />
                 </div>
-                <h3 className="text-lg font-semibent text-gray-900 dark:text-white">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   Google Account
                 </h3>
               </div>

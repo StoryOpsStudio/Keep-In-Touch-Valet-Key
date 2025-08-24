@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Newspaper, 
   Clock, 
@@ -26,6 +26,7 @@ import { useAuthStore } from '../store/authStore';
 
 export function NewsPage() {
   const { user } = useAuthStore(); // Get authenticated user
+  const hasTriggeredInitialScan = useRef(false);
   const {
     matches: storedMatches,
     unreadCount,
@@ -64,14 +65,15 @@ export function NewsPage() {
     }
   }, [user, fetchInitialMatches]);
 
-  // First-Visit Deep Scan Logic
-  useEffect(() => {
-    if (!hasPerformedInitialScan && legacyContacts.length > 0 && !contactsLoading && user) {
-      console.log(`🚀 [NewsPage] First visit to News tab this session for user ${user.email}. Triggering initial scan.`);
-      setInitialScanPerformed(); 
-      handleCheckNow();
-    }
-  }, [hasPerformedInitialScan, legacyContacts.length, contactsLoading, setInitialScanPerformed, user]);
+// First-Visit Deep Scan Logic
+useEffect(() => {
+  if (!hasTriggeredInitialScan.current && !hasPerformedInitialScan && legacyContacts.length > 0 && !contactsLoading && user) {
+    hasTriggeredInitialScan.current = true; // Set immediately to prevent duplicates
+    console.log(`🚀 [NewsPage] First visit to News tab this session for user ${user.email}. Triggering initial scan.`);
+    setInitialScanPerformed(); 
+    handleCheckNow();
+  }
+}, [hasPerformedInitialScan, legacyContacts.length, contactsLoading, setInitialScanPerformed, user]);
 
   // Update countdown timer
   useEffect(() => {
